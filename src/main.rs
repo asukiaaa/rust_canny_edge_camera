@@ -30,6 +30,7 @@ use std::time::Duration;
 struct Model {
     relm: Relm<Win>,
     started_camera: Option<Camera>,
+    color_pixbuf: Option<Pixbuf>,
 }
 
 #[derive(Msg)]
@@ -42,7 +43,8 @@ enum Msg {
 // Create the structure that holds the widgets used in the view.
 struct Win {
     state_label: Label,
-    image: Image,
+    color_image: Image,
+    gray_image: Image,
     model: Model,
     window: Window,
 }
@@ -66,6 +68,7 @@ impl Update for Win {
         Model {
             relm: relm.clone(),
             started_camera: None,
+            color_pixbuf: None,
         }
     }
 
@@ -77,14 +80,19 @@ impl Update for Win {
                 } else {
                     self.open_camera();
                     self.set_msg_timeout(10, Msg::UpdateCameraImage);
-                    // self.set_timeout_for_msg_update_camera_image();
                 }
             },
             Msg::UpdateCameraImage(()) => {
                 if self.model.started_camera.is_some() {
-                    self.update_camera_image();
-                    self.set_msg_timeout(10, Msg::UpdateCameraImage);
-                    // self.set_timeout_for_msg_update_camera_image();
+                    {
+                        self.model.color_pixbuf = self.update_camera_image();
+                        self.set_msg_timeout(10, Msg::UpdateCameraImage);
+                    }
+                    {
+                        let pixbuf = self.get_gray_pixbuf().unwrap();
+                        let gray_image = &self.gray_image;
+                        gray_image.set_from_pixbuf(&pixbuf);
+                    }
                 }
             },
             Msg::Quit => gtk::main_quit(),
@@ -111,8 +119,11 @@ impl Widget for Win {
         let toggle_camera_button = Button::new_with_label("toggle camera");
         vbox.add(&toggle_camera_button);
 
-        let image = Image::new();
-        vbox.add(&image);
+        let color_image = Image::new();
+        vbox.add(&color_image);
+
+        let gray_image = Image::new();
+        vbox.add(&gray_image);
 
         let window = Window::new(WindowType::Toplevel);
         window.add(&vbox);
@@ -124,12 +135,28 @@ impl Widget for Win {
 
         Win {
             state_label: state_label,
-            image: image,
+            color_image: color_image,
+            gray_image: gray_image,
             model,
             window: window,
         }
     }
 }
+
+/*
+fn print_pixbuf_info(pixbuf: &Pixbuf) {
+    unsafe {
+        println!("pixels len: {:?}", pixbuf.get_pixels().len());
+    }
+    println!("width: {:?}", pixbuf.get_width());
+    println!("height: {:?}", pixbuf.get_height());
+    println!("width x height: {:?}", pixbuf.get_width() * pixbuf.get_height());
+    println!("rowstride: {:?}", pixbuf.get_rowstride());
+    println!("colorspace: {:?}", pixbuf.get_colorspace());
+    println!("has alpha: {:?}", pixbuf.get_has_alpha());
+    println!("bits per sample: {:?}", pixbuf.get_bits_per_sample());
+}
+*/
 
 impl Win {
     fn set_msg_timeout<CALLBACK>(
@@ -143,20 +170,41 @@ impl Win {
         self.model.relm.connect_exec_ignore_err(stream, callback);
     }
 
-    // fn set_timeout_for_msg_update_camera_image(&mut self) {
-    //     let stream = Timeout::new(Duration::from_millis(10));
-    //     self.model.relm.connect_exec_ignore_err(stream, Msg::UpdateCameraImage);
-    // }
+    fn get_gray_pixbuf(&mut self) -> Option<Pixbuf> {
+        let color_pixbuf = self.model.color_pixbuf.as_ref().unwrap();
+        let mut gray_pixels: Vec<u8> = vec![];
+        unsafe {
+            for rgb in color_pixbuf.get_pixels().chunks(3) {
+                let mut pixel: u16 = (0.3 * rgb[0] as f32 + 0.59 * rgb[1] as f32 + 0.11 * rgb[2] as f32) as u16;
+                if pixel > 0xff as u16 {
+                    pixel = 0xff as u16;
+                }
+                gray_pixels.push(pixel as u8);
+                gray_pixels.push(pixel as u8);
+                gray_pixels.push(pixel as u8);
+            }
+        }
+        let gray_pixbuf = Pixbuf::new_from_vec(
+            gray_pixels,
+            0, // pixbuf supports only RGB
+            false,
+            8,
+            color_pixbuf.get_width(),
+            color_pixbuf.get_height(),
+            color_pixbuf.get_width() * 3);
+        Some(gray_pixbuf)
+    }
 
-    fn update_camera_image(&mut self) {
+    fn update_camera_image(&mut self) -> Option<Pixbuf> {
         let camera = self.model.started_camera.as_mut().unwrap();
-        let image = &self.image;
         let frame = camera.capture().unwrap();
         let pixbuf = jpeg_vec_to_pixbuf(&frame[..]);
-        image.set_from_pixbuf(&pixbuf);
+        let color_image = &self.color_image;
+        color_image.set_from_pixbuf(&pixbuf);
         while gtk::events_pending() {
             gtk::main_iteration_do(true);
         }
+        Some(pixbuf)
     }
 
     fn open_camera(&mut self) {
