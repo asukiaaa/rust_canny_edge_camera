@@ -1,6 +1,7 @@
 extern crate futures_glib;
 extern crate gtk;
 extern crate gdk_pixbuf;
+extern crate ndarray;
 #[macro_use]
 extern crate relm;
 #[macro_use]
@@ -23,6 +24,7 @@ use gtk::{
     WindowType,
 };
 use gtk::Orientation::Vertical;
+use ndarray::{Array, Array2};
 use relm::{Relm, Update, Widget};
 use rscam::{Camera, Config};
 use std::time::Duration;
@@ -30,7 +32,6 @@ use std::time::Duration;
 struct Model {
     relm: Relm<Win>,
     started_camera: Option<Camera>,
-    color_pixbuf: Option<Pixbuf>,
 }
 
 #[derive(Msg)]
@@ -56,6 +57,50 @@ fn jpeg_vec_to_pixbuf(jpeg_vec: &[u8]) -> Pixbuf {
     loader.get_pixbuf().unwrap()
 }
 
+fn pixbuf_to_gray_mat(color_pixbuf: &Pixbuf) -> Array2<u8> {
+    let mut gray_pixels: Vec<u8> = vec![];
+    unsafe {
+        for rgb in color_pixbuf.get_pixels().chunks(3) {
+            let mut pixel: u16 = (0.3 * rgb[0] as f32 +
+                                  0.59 * rgb[1] as f32 +
+                                  0.11 * rgb[2] as f32) as u16;
+            if pixel > 0xff as u16 {
+                pixel = 0xff as u16;
+            }
+            gray_pixels.push(pixel as u8);
+        }
+    }
+    let w = color_pixbuf.get_width() as usize;
+    let h = color_pixbuf.get_height() as usize;
+    Array::from_vec(gray_pixels).into_shape((w, h)).unwrap()
+}
+
+fn get_edge_mat(gray_mat: Array2<u8>) -> Array2<u8> {
+    gray_mat
+}
+
+fn mat_to_pixbuf(edge_mat: Array2<u8>) -> Pixbuf {
+    let uw: usize;
+    let uh: usize;
+    {
+        let shape = &edge_mat.shape();
+        uw = shape[0];
+        uh = shape[1];
+    }
+    let iw = uw as i32;
+    let ih = uh as i32;
+    let mut gray_rgb_vec:Vec<u8> = vec![];
+    for p in edge_mat.into_shape((uw * uh)).unwrap().to_vec() {
+        gray_rgb_vec.extend_from_slice(&[p, p, p])
+    }
+    Pixbuf::new_from_vec(
+        gray_rgb_vec,
+        0, // pixbuf supports only RGB
+        false,
+        8,
+        iw, ih, iw * 3)
+}
+
 impl Update for Win {
     // Specify the model used for this widget.
     type Model = Model;
@@ -68,7 +113,6 @@ impl Update for Win {
         Model {
             relm: relm.clone(),
             started_camera: None,
-            color_pixbuf: None,
         }
     }
 
@@ -84,12 +128,13 @@ impl Update for Win {
             },
             Msg::UpdateCameraImage(()) => {
                 if self.model.started_camera.is_some() {
-                    {
-                        self.model.color_pixbuf = self.update_camera_image();
+                    let color_pixbuf = self.update_camera_image();
+                    if color_pixbuf.is_some() {
+                        let color_pixbuf = color_pixbuf.unwrap();
                         self.set_msg_timeout(10, Msg::UpdateCameraImage);
-                    }
-                    {
-                        let pixbuf = self.get_gray_pixbuf().unwrap();
+                        let gray_mat = pixbuf_to_gray_mat(&color_pixbuf);
+                        let edge_mat = get_edge_mat(gray_mat);
+                        let pixbuf = mat_to_pixbuf(edge_mat);
                         let gray_image = &self.gray_image;
                         gray_image.set_from_pixbuf(&pixbuf);
                     }
@@ -168,31 +213,6 @@ impl Win {
     {
         let stream = Timeout::new(Duration::from_millis(millis));
         self.model.relm.connect_exec_ignore_err(stream, callback);
-    }
-
-    fn get_gray_pixbuf(&mut self) -> Option<Pixbuf> {
-        let color_pixbuf = self.model.color_pixbuf.as_ref().unwrap();
-        let mut gray_pixels: Vec<u8> = vec![];
-        unsafe {
-            for rgb in color_pixbuf.get_pixels().chunks(3) {
-                let mut pixel: u16 = (0.3 * rgb[0] as f32 + 0.59 * rgb[1] as f32 + 0.11 * rgb[2] as f32) as u16;
-                if pixel > 0xff as u16 {
-                    pixel = 0xff as u16;
-                }
-                gray_pixels.push(pixel as u8);
-                gray_pixels.push(pixel as u8);
-                gray_pixels.push(pixel as u8);
-            }
-        }
-        let gray_pixbuf = Pixbuf::new_from_vec(
-            gray_pixels,
-            0, // pixbuf supports only RGB
-            false,
-            8,
-            color_pixbuf.get_width(),
-            color_pixbuf.get_height(),
-            color_pixbuf.get_width() * 3);
-        Some(gray_pixbuf)
     }
 
     fn update_camera_image(&mut self) -> Option<Pixbuf> {

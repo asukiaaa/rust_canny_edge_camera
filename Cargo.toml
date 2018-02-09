@@ -7,6 +7,7 @@ authors = ["asuki <asukiaaa@gmail.com>"]
 futures-glib = "0.3.2"
 gtk = "^0.3.0"
 gdk-pixbuf = "0.3.0"
+ndarray = "0.11"
 relm = "^0.11.0"
 relm-derive = "^0.11.0"
 rscam = "0.5.3"
