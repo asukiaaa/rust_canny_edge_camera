@@ -239,7 +239,6 @@ impl Update for Win {
                     let color_pixbuf = self.update_camera_image();
                     if color_pixbuf.is_some() {
                         let color_pixbuf = color_pixbuf.unwrap();
-                        self.set_msg_timeout(10, Msg::UpdateCameraImage);
                         let gray_mat = pixbuf_to_gray_mat(&color_pixbuf);
                         let blur_gray_mat = apply_gaussian_filter(&gray_mat);
                         let (strength_vec, angle_vec) = get_strength_and_angle(&blur_gray_mat);
@@ -249,6 +248,8 @@ impl Update for Win {
                         let gray_image = &self.gray_image;
                         gray_image.set_from_pixbuf(&pixbuf);
                     }
+                    self.close_camera();
+                    self.set_msg_timeout(10, Msg::UpdateCameraImage);
                 }
             },
             Msg::Quit => gtk::main_quit(),
