@@ -60,25 +60,30 @@ fn jpeg_vec_to_pixbuf(jpeg_vec: &[u8]) -> Pixbuf {
 }
 
 fn pixbuf_to_gray_mat(color_pixbuf: &Pixbuf) -> Array2<f32> {
-    let mut gray_pixels: Vec<f32> = vec![];
+    let mut gray_pixels = vec![];
+    let pixels;
     unsafe {
-        for rgb in color_pixbuf.get_pixels().chunks(3) {
-            let mut pixel: u16 = (0.3 * rgb[0] as f32 +
-                                  0.59 * rgb[1] as f32 +
-                                  0.11 * rgb[2] as f32) as u16;
-            if pixel > 0xff as u16 {
-                pixel = 0xff as u16;
-            }
-            gray_pixels.push(pixel as f32);
-        }
+        pixels = color_pixbuf.get_pixels();
+    }
+    for rgb in pixels.chunks(3) {
+        let pixel =
+            0.299 * rgb[0] as f32 +
+            0.587 * rgb[1] as f32 +
+            0.114 * rgb[2] as f32;
+        gray_pixels.push(pixel);
     }
     let w = color_pixbuf.get_width() as usize;
     let h = color_pixbuf.get_height() as usize;
     Array::from_vec(gray_pixels).into_shape((h, w)).unwrap()
 }
 
-fn apply_gaussian_filter(gray_mat: Array2<f32>) -> Array2<f32> {
-    let mut blur_vec: Vec<f32> = vec![];
+fn array2_size(array2: &Array2<f32>) -> (usize, usize) {
+    let shape = array2.shape();
+    (shape[1], shape[0])
+}
+
+fn apply_gaussian_filter(gray_mat: &Array2<f32>) -> Array2<f32> {
+    let mut blur_vec = vec![];
     let edge_detect_mat = arr2(
         &[[2.,  4.,  5.,  4., 2.],
           [4.,  9., 12.,  9., 4.],
@@ -86,13 +91,7 @@ fn apply_gaussian_filter(gray_mat: Array2<f32>) -> Array2<f32> {
           [4.,  9., 12.,  9., 4.],
           [2.,  4.,  5.,  4., 2.]]);
     let base = edge_detect_mat.scalar_sum();
-    let w: usize;
-    let h: usize;
-    {
-        let shape = gray_mat.shape();
-        h = shape[0];
-        w = shape[1];
-    }
+    let (w, h) = array2_size(&gray_mat);
     for i in 0..h {
         for j in 0..w {
             if i<3 || h-4<i || j<3 || w-4<j {
@@ -122,49 +121,37 @@ fn get_rough_angle(angle: f32) -> i32 {
 
 fn is_edge_pixel(current_x: usize, current_y: usize, image_w: usize, strength_vec: &Vec<f32>, compare_angle: i32) -> bool {
     let current_index = image_w * current_y + current_x;
-    let compare_index1: usize;
-    let compare_index2: usize;
-    match compare_angle {
-        45 => {
-            compare_index1 = image_w * current_y + current_x + 1;
-            compare_index2 = image_w * current_y + current_x - 1;
-        },
-        90 => {
-            compare_index1 = image_w * (current_y - 1) + current_x - 1;
-            compare_index2 = image_w * (current_y + 1) + current_x + 1;
-        },
-        135 => {
-            compare_index1 = image_w * (current_y - 1) + current_x - 1;
-            compare_index2 = image_w * (current_y + 1) + current_x + 1;
-        },
-        _ => {
-            compare_index1 = image_w * (current_y - 1) + current_x;
-            compare_index2 = image_w * (current_y + 1) + current_x;
-        },
-    }
+    let (compare_index1, compare_index2) =
+        match compare_angle {
+            45 =>
+                (image_w * current_y + current_x + 1,
+                 image_w * current_y + current_x - 1),
+            90 =>
+                (image_w * (current_y - 1) + current_x - 1,
+                 image_w * (current_y + 1) + current_x + 1),
+            135 =>
+                (image_w * (current_y - 1) + current_x - 1,
+                 image_w * (current_y + 1) + current_x + 1),
+            _ =>
+                (image_w * (current_y - 1) + current_x,
+                 image_w * (current_y + 1) + current_x),
+        };
     let current_strength = strength_vec[current_index];
     let compare_strength1 = strength_vec[compare_index1];
     let compare_strength2 = strength_vec[compare_index2];
     current_strength > compare_strength1 && current_strength > compare_strength2
 }
 
-fn get_edge(gray_mat: Array2<f32>) -> Array2<f32> {
-    let mut edge_vec: Vec<f32> = vec![];
-    let w: usize;
-    let h: usize;
-    {
-        let shape = gray_mat.shape();
-        h = shape[0];
-        w = shape[1];
-    }
+fn get_strength_and_angle(gray_mat: &Array2<f32>) -> (Vec<f32>, Vec<i32>) {
+    let (w, h) = array2_size(&gray_mat);
     let gx_mat = arr2(&[[-1.,  0.,  1.],
                         [-2.,  0.,  2.],
                         [-1.,  0.,  1.]]);
     let gy_mat = arr2(&[[-1., -2., -1.],
                         [ 0.,  0.,  0.],
                         [ 1.,  2.,  1.]]);
-    let mut strength_vec: Vec<f32> = vec![];
-    let mut angle_vec: Vec<i32> = vec![];
+    let mut strength_vec = vec![];
+    let mut angle_vec = vec![];
     for i in 0..h {
         for j in 0..w {
             if i<2 || h-3<i || j<2 || w-3<j {
@@ -181,6 +168,11 @@ fn get_edge(gray_mat: Array2<f32>) -> Array2<f32> {
             }
         }
     }
+    (strength_vec, angle_vec)
+}
+
+fn get_edge(strength_vec: &Vec<f32>, angle_vec: &Vec<i32>, w: usize, h: usize) -> Array2<f32> {
+    let mut edge_vec = vec![];
     for i in 0..h {
         for j in 0..w {
             if i<2 || h-3<i || j<2 || w-3<j {
@@ -201,18 +193,13 @@ fn get_edge(gray_mat: Array2<f32>) -> Array2<f32> {
 }
 
 fn mat_to_pixbuf(edge_mat: Array2<f32>) -> Pixbuf {
-    let uw: usize;
-    let uh: usize;
-    {
-        let shape = &edge_mat.shape();
-        uh = shape[0];
-        uw = shape[1];
-    }
+    let (uw, uh) = array2_size(&edge_mat);
     let iw = uw as i32;
     let ih = uh as i32;
-    let mut gray_rgb_vec:Vec<u8> = vec![];
+    let mut gray_rgb_vec = vec![];
     for p in edge_mat.into_shape((uw * uh)).unwrap().to_vec() {
-        gray_rgb_vec.extend_from_slice(&[p as u8, p as u8, p as u8])
+        let p = p as u8;
+        gray_rgb_vec.extend_from_slice(&[p, p, p])
     }
     Pixbuf::new_from_vec(
         gray_rgb_vec,
@@ -254,8 +241,10 @@ impl Update for Win {
                         let color_pixbuf = color_pixbuf.unwrap();
                         self.set_msg_timeout(10, Msg::UpdateCameraImage);
                         let gray_mat = pixbuf_to_gray_mat(&color_pixbuf);
-                        let blur_gray_mat = apply_gaussian_filter(gray_mat);
-                        let edge_mat = get_edge(blur_gray_mat);
+                        let blur_gray_mat = apply_gaussian_filter(&gray_mat);
+                        let (strength_vec, angle_vec) = get_strength_and_angle(&blur_gray_mat);
+                        let (w, h) = array2_size(&blur_gray_mat);
+                        let edge_mat = get_edge(&strength_vec, &angle_vec, w, h);
                         let pixbuf = mat_to_pixbuf(edge_mat);
                         let gray_image = &self.gray_image;
                         gray_image.set_from_pixbuf(&pixbuf);
